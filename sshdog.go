@@ -129,13 +129,20 @@ func daemonStart() (waitFunc func(), stopFunc func()) {
 			return
 		}
 	}
-
+	authSet := false
+	if passwordData, err := mainBox.Bytes("password"); err == nil {
+		dbg.Debug("Setting auth password.")
+		server.SetAuthPassword(passwordData)
+		authSet = true
+	}
 	if authData, err := mainBox.Bytes("authorized_keys"); err == nil {
 		dbg.Debug("Adding authorized_keys.")
 		server.AddAuthorizedKeys(authData)
-	} else {
-		dbg.Debug("No authorized keys found: %v", err)
-		return
+		authSet = true
+	}
+	if !authSet {
+		dbg.Debug("Neither password nor key was configured. We will not do any auth!")
+		//return
 	}
 	server.ListenAndServe(getPort(mainBox))
 	return server.Wait, server.Stop

@@ -30,6 +30,7 @@ type Server struct {
 	ServerConfig   ssh.ServerConfig
 	Socket         net.Listener
 	AuthorizedKeys map[string]bool
+	AuthPassword   string
 	stop           chan bool
 	done           chan bool
 }
@@ -43,9 +44,9 @@ var keyNames = []string{
 func NewServer() *Server {
 	s := &Server{}
 	s.AuthorizedKeys = make(map[string]bool)
-	s.ServerConfig.PublicKeyCallback = s.VerifyPublicKey
 	s.stop = make(chan bool)
 	s.done = make(chan bool, 1)
+	s.ServerConfig.NoClientAuth = true
 	return s
 }
 
@@ -149,6 +150,10 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) AddAuthorizedKeys(keyData []byte) {
+	if len(keyData) > 0 {
+		s.ServerConfig.PublicKeyCallback = s.VerifyPublicKey
+		s.ServerConfig.NoClientAuth = false
+	}
 	for len(keyData) > 0 {
 		newKey, _, _, left, err := ssh.ParseAuthorizedKey(keyData)
 		keyData = left
@@ -159,12 +164,28 @@ func (s *Server) AddAuthorizedKeys(keyData []byte) {
 		s.AuthorizedKeys[string(newKey.Marshal())] = true
 	}
 }
+func (s *Server) SetAuthPassword(password []byte) {
+	if password != nil && len(password) > 0 {
+		s.AuthPassword = string(password)
+		s.ServerConfig.PasswordCallback = s.VerifyPassword
+		s.ServerConfig.NoClientAuth = false
+	}
+}
 
 func (s *Server) VerifyPublicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 	keyStr := string(key.Marshal())
 	if _, ok := s.AuthorizedKeys[keyStr]; !ok {
 		dbg.Debug("Key not found!")
 		return nil, fmt.Errorf("No valid key found.")
+	}
+	return &ssh.Permissions{}, nil
+}
+
+func (s *Server) VerifyPassword(conn ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+	passwordStr := string(password)
+	if s.AuthPassword != "" && s.AuthPassword != passwordStr {
+		dbg.Debug("Password incorrect!")
+		return nil, fmt.Errorf("Password incorrect.")
 	}
 	return &ssh.Permissions{}, nil
 }

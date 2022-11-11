@@ -112,7 +112,6 @@ type ExecRequest struct {
 }
 
 func shellExe() string {
-	fmt.Printf("%v\n", syscall.Environ())
 	if shell := os.Getenv("SSHDOG_SHELL"); shell != "" {
 		if _, err := os.Stat(shell); err == nil {
 			return shell
