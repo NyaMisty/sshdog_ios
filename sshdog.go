@@ -19,9 +19,11 @@ import (
 	"fmt"
 	"github.com/GeertJohan/go.rice"
 	"github.com/Matir/sshdog/daemon"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Debugger bool
@@ -73,6 +75,44 @@ func beQuiet(box *rice.Box) bool {
 
 var mainBox *rice.Box
 
+func readExitInput() {
+	lastStr := make([]byte, 4)
+	endMark := []byte("exit")
+	var startTime = time.Now()
+	var firstErr error
+	for {
+		buf := make([]byte, 1)
+		n, err := os.Stdin.Read(buf)
+		if err != nil {
+			if firstErr == nil && err == io.EOF {
+				if time.Now().Sub(startTime) < 1*time.Second { // like ./sshdog < /dev/null
+					dbg.Debug("We don't have stdin, not monitoring exit input!")
+					return
+				} // else the user may input an EOF after some time
+			}
+			if err != io.EOF {
+				dbg.Debug("fatal: unknown read err: %v", err)
+				os.Exit(1)
+			} else {
+				os.Exit(0)
+			}
+		}
+		if n == 1 {
+			lastStr = append(lastStr[1:], buf[0])
+			//fmt.Printf("last input: %d\n", buf[0])
+		}
+		shouldExit := true
+		for i := range lastStr {
+			if lastStr[i] != endMark[i] {
+				shouldExit = false
+			}
+		}
+		if shouldExit {
+			os.Exit(0)
+		}
+	}
+}
+
 func main() {
 	mainBox = mustFindBox()
 
@@ -85,6 +125,7 @@ func main() {
 			dbg.Debug("Error daemonizing: %v", err)
 		}
 	} else {
+		go readExitInput()
 		waitFunc, _ := daemonStart()
 		if waitFunc != nil {
 			waitFunc()
