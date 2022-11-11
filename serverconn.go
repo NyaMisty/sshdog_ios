@@ -17,8 +17,9 @@ package main
 
 import (
 	"fmt"
+	exec2 "github.com/Matir/sshdog/exec"
+	"github.com/Matir/sshdog/pty"
 	"github.com/google/shlex"
-	"github.com/matir/sshdog/pty"
 	"golang.org/x/crypto/ssh"
 	"io"
 	"net"
@@ -27,6 +28,7 @@ import (
 	"os/user"
 	"runtime"
 	"sync"
+	"syscall"
 )
 
 // Handling for a single incoming connection
@@ -109,15 +111,30 @@ type ExecRequest struct {
 	Cmd string
 }
 
+func shellExe() string {
+	fmt.Printf("%v\n", syscall.Environ())
+	if shell := os.Getenv("SSHDOG_SHELL"); shell != "" {
+		if _, err := os.Stat(shell); err == nil {
+			return shell
+		}
+	}
+	switch runtime.GOOS {
+	case "windows":
+		return "C:\\windows\\system32\\cmd.exe"
+	default:
+		return "/bin/sh"
+	}
+}
+
 func defaultShell() []string {
 	switch runtime.GOOS {
 	case "windows":
 		return []string{
-			"C:\\windows\\system32\\cmd.exe",
+			shellExe(),
 			"/Q",
 		}
 	default:
-		return []string{"/bin/sh"}
+		return []string{shellExe()}
 	}
 }
 
@@ -125,13 +142,13 @@ func commandWithShell(command string) []string {
 	switch runtime.GOOS {
 	case "windows":
 		return []string{
-			"C:\\windows\\system32\\cmd.exe",
+			shellExe(),
 			"/C",
 			command,
 		}
 	default:
 		return []string{
-			"/bin/sh",
+			shellExe(),
 			"-c",
 			command,
 		}
@@ -236,7 +253,9 @@ func (conn *ServerConn) HandleSessionChannel(wg *sync.WaitGroup, newChan ssh.New
 func (conn *ServerConn) ExecuteForChannel(shellCmd []string, ch ssh.Channel) {
 	dbg.Debug("Executing %v", shellCmd)
 	proc := exec.Command(shellCmd[0], shellCmd[1:]...)
-	proc.Env = conn.environ
+	proc.Env = append([]string{}, conn.environ...)
+	proc.Env = append([]string{}, syscall.Environ()...)
+
 	if userInfo, err := user.Current(); err == nil {
 		proc.Dir = userInfo.HomeDir
 	}
@@ -249,7 +268,9 @@ func (conn *ServerConn) ExecuteForChannel(shellCmd []string, ch ssh.Channel) {
 		conn.pty.AttachPty(proc)
 		conn.pty.AttachIO(ch, ch)
 	}
-	proc.Run()
+	//proc.Run()
+	exec2.Run(proc)
+
 	dbg.Debug("Finished execution.")
 }
 
