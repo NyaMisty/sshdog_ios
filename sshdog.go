@@ -18,7 +18,7 @@ package main
 import (
 	"fmt"
 	"github.com/GeertJohan/go.rice"
-	"github.com/matir/sshdog/daemon"
+	"github.com/Matir/sshdog/daemon"
 	"os"
 	"strconv"
 	"strings"
