@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"github.com/GeertJohan/go.rice"
 	"github.com/Matir/sshdog/daemon"
+	"github.com/Matir/sshdog/dbglog"
 	"io"
 	"os"
 	"strconv"
@@ -26,16 +27,7 @@ import (
 	"time"
 )
 
-type Debugger bool
-
-func (d Debugger) Debug(format string, args ...interface{}) {
-	if d {
-		msg := fmt.Sprintf(format, args...)
-		fmt.Fprintf(os.Stderr, "[DEBUG] %s\n", msg)
-	}
-}
-
-var dbg Debugger = true
+var dbg = dbglog.Dbg
 
 // Lookup the port number
 func getPort(box *rice.Box) int16 {
@@ -114,10 +106,18 @@ func readExitInput() {
 }
 
 func main() {
+	if len(os.Args) >= 2 {
+		if os.Args[1] == "spawn" {
+			handleSpawnHelper()
+			fmt.Printf("Fuck!")
+			os.Exit(1)
+		}
+	}
+
 	mainBox = mustFindBox()
 
 	if beQuiet(mainBox) {
-		dbg = false
+		dbg.Enable = false
 	}
 
 	if shouldDaemonize(mainBox) {
