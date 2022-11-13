@@ -9,9 +9,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Matir/sshdog/dbglog"
+	"golang.org/x/sys/unix"
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -223,6 +226,7 @@ func (c *Cmd) Start() error {
 }
 
 func PosixSpawn(cmd *Cmd) error {
+	dbg := dbglog.Dbg.WithPrefix("[spawn]")
 	// int posix_spawn(pid_t *restrict pid, const char *restrict path,
 	//       const posix_spawn_file_actions_t *file_actions,
 	//       const posix_spawnattr_t *restrict attrp,
@@ -231,7 +235,18 @@ func PosixSpawn(cmd *Cmd) error {
 	path := cmd.Path
 	args := cmd.Args
 	envp := cmd.Env
-	fmt.Printf("path: %s, args: %v, envp: %v", path, args, envp)
+
+	isSpawnHelper := cmd.SysProcAttr != nil && cmd.SysProcAttr.Chroot == "exec"
+	needSpawnHelper := cmd.SysProcAttr != nil && cmd.SysProcAttr.Setctty
+
+	if needSpawnHelper {
+		dbg.Debug("using spawnHelper!\n")
+		path, _ = os.Executable()
+		args = append([]string{path, "spawn", strconv.Itoa(cmd.SysProcAttr.Ctty)}, args...)
+		//path = "ptyspawn_helper"
+		//args = append([]string{path, strconv.Itoa(cmd.SysProcAttr.Ctty)}, args...)
+	}
+	dbg.Debug("path: %s, args: %v, isSpawn: %v, needSpawn: %v\n", path, args, isSpawnHelper, needSpawnHelper)
 
 	var retval C.int = 0
 
@@ -260,25 +275,42 @@ func PosixSpawn(cmd *Cmd) error {
 		}
 	}()
 
+	dbg.Debug("setting up posix_spawnattr_init...")
 	var spattr C.posix_spawnattr_t
 	retval = C.posix_spawnattr_init(&spattr)
 	if retval != 0 {
-		return fmt.Errorf("posix_spawnattr_init returned %d", retval)
+		err := fmt.Errorf("posix_spawnattr_init returned %d", retval)
+		dbg.Debug("%v", err)
+		return err
 	}
 
+	flags := []string{}
 	var spflags C.short = 0
-	//spflags |= C.POSIX_SPAWN_SETEXEC
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setsid {
+		flags = append(flags, "setsid")
+		spflags |= C.POSIX_SPAWN_SETSID
+	}
+	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
+		flags = append(flags, "setpgroup")
+		spflags |= C.POSIX_SPAWN_SETPGROUP
+	}
+	if isSpawnHelper {
+		flags = append(flags, "setexec")
+		spflags |= C.POSIX_SPAWN_SETEXEC
+	}
+	dbg.Debug("setting up posix_spawnattr_setflags: %v", flags)
 
 	retval = C.posix_spawnattr_setflags(&spattr, spflags)
 	if retval != 0 {
-		return fmt.Errorf("posix_spawnattr_setflags returned %d", retval)
+		err := fmt.Errorf("posix_spawnattr_setflags returned %d", retval)
+		dbg.Debug("%v", err)
+		return err
 	}
 
-	var child_fd_actions C.posix_spawn_file_actions_t
-	retval = C.posix_spawn_file_actions_init(&child_fd_actions)
-	if retval != 0 {
-		return fmt.Errorf("posix_spawn_file_actions_init returned %d", retval)
-	}
+	dbg.Debug("setting up stdin/out files...")
+
+	// The code below won't work, as cmd_stdXX won't start forwarding goroutine itself,
+	// but letting exec.Start to execute all goroutine together
 
 	//// here we'll leak c.closeAfterStart, but who cares :)
 	//stdinF, err := cmd_stdin(cmd)
@@ -301,47 +333,135 @@ func PosixSpawn(cmd *Cmd) error {
 	//	return err
 	//}
 
+	for _, f := range cmd.childFiles {
+		_, _ = unix.FcntlInt(f.Fd(), unix.F_SETFD, 0) // clear FD_CLOEXEC
+	}
 	stdinF := cmd.childFiles[0]
 	stdoutF := cmd.childFiles[1]
 	stderrF := cmd.childFiles[2]
 
-	fmt.Printf("%v, %v, %v\n", stdinF, stdoutF, stderrF)
+	//fmt.Printf("%v, %v, %v\n", stdinF, stdoutF, stderrF)
 
-	retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stdinF.Fd()), 0)
-	retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stdoutF.Fd()), 1)
-	retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stderrF.Fd()), 2)
+	dbg.Debug("setting up posix_spawn_file_actions...")
+	var child_fd_actions C.posix_spawn_file_actions_t
+	retval = C.posix_spawn_file_actions_init(&child_fd_actions)
+	if retval != 0 {
+		err := fmt.Errorf("posix_spawn_file_actions_init returned %d", retval)
+		dbg.Debug("%v", err)
+		return err
+	}
+	if !needSpawnHelper {
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stdinF.Fd()), 0)
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stdoutF.Fd()), 1)
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(stderrF.Fd()), 2)
+	} else { // pass ctty
+		// spawnHelper uses this, and it will be finally redirect the tty to stdXX
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(os.Stdin.Fd()), 0)
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(os.Stdout.Fd()), 1)
+		retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(os.Stderr.Fd()), 2)
+
+		// pass the ctty to spawnHelper (trying to make ctty appears at a fixed fd, but failed due to FD_CLOEXEC lol)
+		//retval += C.posix_spawn_file_actions_adddup2(&child_fd_actions, C.int(cmd.SysProcAttr.Ctty), 40000)
+	}
 
 	if retval != 0 {
-		return fmt.Errorf("posix_spawn_file_actions_add calls returned %d", retval)
+		err := fmt.Errorf("posix_spawn_file_actions_add calls returned %d", retval)
+		dbg.Debug("%v", err)
+		return err
 	}
 
-	oriCwd, err := os.Getwd()
-	newCwdPtr, err := syscall.BytePtrFromString(cmd.Dir)
-	if err != nil {
-		return fmt.Errorf("BytePtrFromString returned %d", retval)
+	wrapChdir := func(fun func() error) error {
+		dbg.Debug("changing directory...")
+
+		oriCwd, err := os.Getwd()
+
+		newCwdPtr, err := syscall.BytePtrFromString(cmd.Dir)
+		if err != nil {
+			err := fmt.Errorf("BytePtrFromString err %v", err)
+			dbg.Debug("%v", err)
+			return err
+		}
+		syscall.Syscall(syscall.SYS___PTHREAD_CHDIR, uintptr(unsafe.Pointer(newCwdPtr)), 0, 0)
+
+		defer func() {
+			oriCwdPtr, err := syscall.BytePtrFromString(oriCwd)
+			_ = err
+			syscall.Syscall(syscall.SYS___PTHREAD_CHDIR, uintptr(unsafe.Pointer(oriCwdPtr)), 0, 0)
+		}()
+
+		return fun()
 	}
-	syscall.Syscall(syscall.SYS___PTHREAD_CHDIR, uintptr(unsafe.Pointer(newCwdPtr)), 0, 0)
-	var pid C.pid_t = -1
-	retval = C.posix_spawnp(
-		&pid,                                   // pid
-		sppath,                                 // file
-		&child_fd_actions,                      // fileaction
-		&spattr,                                // attr
-		(**C.char)(unsafe.Pointer(&spargv[0])), // argv
-		(**C.char)(unsafe.Pointer(&spenvp[0])), // envp
-	)
-	oriCwdPtr, err := syscall.BytePtrFromString(oriCwd)
-	if err != nil {
-		return fmt.Errorf("BytePtrFromString returned %d", retval)
+
+	wrapCtty := func(fun func() error) error {
+		var errno syscall.Errno
+		_ = errno
+
+		// I thought we can setsid() -> set control tty -> setsid() -> set control tty -> ...
+		// But actually control TTY can only be set to **session leader**,
+		//    and sadly we have only one chance to become session leader
+		// After setsid you become the session leader, and you will ALWAYS be session leader :(
+		// so, useless code below :(
+
+		//oriTTY, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+		//_ = oriTTY
+		//if err != nil {
+		//	fmt.Printf("Failed to open oriTTY: %d\n", errno)
+		//}
+		//defer func() {
+		//	if cmd.SysProcAttr != nil {
+		//		unix.Setsid()
+		//		cttyArg := 1
+		//		_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(oriTTY.Fd()), unix.TIOCSCTTY, uintptr(unsafe.Pointer(&cttyArg)))
+		//		fmt.Printf("Got TIOCSCTTY revert errno: %d\n", errno)
+		//	}
+		//}()
+		//if cmd.SysProcAttr != nil { // we change our ctty, then it will get passed down to the child
+		//	_, err := unix.Setsid()
+		//	if err != nil {
+		//		fmt.Printf("Setsid, err: %v\n", err)
+		//		return err
+		//	}
+		//	//pgrp := 1
+		//	//_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(cmd.SysProcAttr.Ctty), unix.TIOCSPGRP, uintptr(unsafe.Pointer(&pgrp)))
+		//	cttyArg := 0
+		//	_, _, errno = unix.Syscall(unix.SYS_IOCTL, uintptr(cmd.SysProcAttr.Ctty), unix.TIOCSCTTY, uintptr(unsafe.Pointer(&cttyArg)))
+		//	if int(errno) != 0 {
+		//		fmt.Printf("TIOCSCTTY failed but maybe we can ignore it, errno: %d\n", errno)
+		//	}
+		//}
+
+		return fun()
 	}
-	syscall.Syscall(syscall.SYS___PTHREAD_CHDIR, uintptr(unsafe.Pointer(oriCwdPtr)), 0, 0)
-	if retval != 0 {
-		return fmt.Errorf("posix_spawnp returned %d", retval)
+
+	runPosixSpawn := func() error {
+		var pid C.pid_t = -1
+		retval = C.posix_spawnp(
+			&pid,                                   // pid
+			sppath,                                 // file
+			&child_fd_actions,                      // fileaction
+			&spattr,                                // attr
+			(**C.char)(unsafe.Pointer(&spargv[0])), // argv
+			(**C.char)(unsafe.Pointer(&spenvp[0])), // envp
+		)
+		if retval != 0 {
+			err := fmt.Errorf("posix_spawnp returned %d", retval)
+			dbg.Debug("%v", err)
+			return err
+		}
+		dbg.Debug("Got spawned pid: %d\n", int(pid))
+		cmd.Process = &os.Process{
+			Pid: int(pid),
+		}
+		return nil
 	}
-	cmd.Process = &os.Process{
-		Pid: int(pid),
-	}
-	return nil
+
+	err := wrapChdir(
+		func() error {
+			return wrapCtty(
+				runPosixSpawn,
+			)
+		})
+	return err
 }
 
 func Start(cmd *exec.Cmd) error {
