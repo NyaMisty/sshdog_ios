@@ -13,7 +13,8 @@
 // limitations under the License.
 
 // TODO: High-level file comment.
-//go:build !linux && !darwin && !ios
+//go:build darwin || ios
+// +build darwin ios
 
 package pty
 
@@ -21,16 +22,19 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"syscall"
 )
 
 var Unsupported = errors.New("Unsupported platform")
 
-func open_pty() (pty, tty *os.File, err error) {
-	return nil, nil, Unsupported
-}
-
-func attach_pty(_ *os.File, _ *exec.Cmd) error {
-	return Unsupported
+func attach_pty(tty *os.File, cmd *exec.Cmd) error {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setsid = true
+	cmd.SysProcAttr.Setctty = true
+	cmd.SysProcAttr.Ctty = int(tty.Fd())
+	return nil
 }
 
 func resize_pty(_ *os.File, _ *ptyWindow) error {

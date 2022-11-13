@@ -16,14 +16,15 @@
 package pty
 
 import (
+	"github.com/pkg/term/termios"
 	"io"
 	"os"
 	"os/exec"
 )
 
 type Pty struct {
-	pty *os.File
-	tty *os.File
+	Pty *os.File
+	Tty *os.File
 }
 
 type ptyWindow struct {
@@ -34,7 +35,9 @@ type ptyWindow struct {
 }
 
 func OpenPty() (*Pty, error) {
-	pty, tty, err := open_pty()
+	//return nil, fmt.Errorf("debug disable Pty")
+	pty, tty, err := termios.Pty()
+	//Pty, Tty, err := open_pty()
 	if err != nil {
 		return nil, err
 	}
@@ -43,26 +46,26 @@ func OpenPty() (*Pty, error) {
 
 // Execute an exec.Cmd attached to a pty
 func (pty *Pty) AttachPty(cmd *exec.Cmd) {
-	cmd.Stdout = pty.tty
-	cmd.Stderr = pty.tty
-	cmd.Stdin = pty.tty
-	attach_pty(pty.tty, cmd)
+	cmd.Stdout = pty.Tty
+	cmd.Stderr = pty.Tty
+	cmd.Stdin = pty.Tty
+	attach_pty(pty.Tty, cmd)
 }
 
 // Close the devices
 func (pty *Pty) Close() {
-	pty.tty.Close()
-	pty.pty.Close()
+	pty.Tty.Close()
+	pty.Pty.Close()
 }
 
 // Resize the pty
 func (pty *Pty) Resize(rows, cols, xpix, ypix uint16) error {
 	win := &ptyWindow{rows, cols, xpix, ypix}
-	return resize_pty(pty.tty, win)
+	return resize_pty(pty.Tty, win)
 }
 
 // Attach to IO
 func (pty *Pty) AttachIO(r io.Reader, w io.Writer) {
-	go io.Copy(pty.pty, r)
-	go io.Copy(w, pty.pty)
+	go io.Copy(pty.Pty, r)
+	go io.Copy(w, pty.Pty)
 }
