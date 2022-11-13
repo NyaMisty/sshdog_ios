@@ -268,9 +268,9 @@ func (conn *ServerConn) ExecuteForChannel(shellCmd []string, ch ssh.Channel) {
 		conn.pty.AttachIO(ch, ch)
 	}
 	//proc.Run()
-	exec2.Run(proc)
+	err := exec2.Run(proc)
 
-	dbg.Debug("Finished execution.")
+	dbg.Debug("Finished execution. Err: %v", err)
 }
 
 // Message for port forwarding
