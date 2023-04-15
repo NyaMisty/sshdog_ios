@@ -19,16 +19,47 @@ package daemon
 
 import (
 	"fmt"
+	"github.com/Matir/sshdog/dbglog"
 	exec2 "github.com/Matir/sshdog/exec"
 	"os"
 	"os/exec"
 	"syscall"
 )
 
+var dbg = dbglog.Dbg
+
 // Attempts to restart this process in the background.
 // This is not a *true* daemonize, as the process is
 // restarted.
 func Daemonize(f DaemonWorker) error {
+	var err error
+	executable, _ := os.Executable()
+	proc := exec.Command(executable, "daemon")
+	proc.SysProcAttr = &syscall.SysProcAttr{}
+	proc.SysProcAttr.Setpgid = true
+	proc.SysProcAttr.Pgid = 0
+	output, err := os.OpenFile("sshdog.log", os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	if err != nil {
+		dbg.Fatalf("failed to open log file: %v", err)
+		return err
+	}
+	dbg.Debug("opened daemon log file: %v", output.Fd())
+	//if userInfo, err := user.Current(); err == nil {
+	//	proc.Dir = userInfo.HomeDir
+	//}
+	proc.Stdout = output
+	proc.Stderr = output
+	//proc.Stdout = os.Stdout
+	//proc.Stdout = os.Stderr
+	err = exec2.Start(proc)
+	if err != nil {
+		dbg.Fatalf("failed to spawn daemon: %v", err)
+		return err
+	}
+	return nil
+}
+
+func DaemonizeOld(f DaemonWorker) error {
 	if done, err := alreadyDaemonized(); err != nil {
 		return err
 	} else if done {

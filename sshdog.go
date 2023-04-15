@@ -57,7 +57,7 @@ func fileExists(box *rice.Box, name string) bool {
 
 // Should we daemonize?
 func shouldDaemonize(box *rice.Box) bool {
-	return fileExists(box, "daemon")
+	return fileExists(box, "daemon_ios")
 }
 
 // Should we be silent?
@@ -106,11 +106,15 @@ func readExitInput() {
 }
 
 func main() {
+	isDaemonWorker := false
 	if len(os.Args) >= 2 {
 		if os.Args[1] == "spawn" {
 			handleSpawnHelper()
 			fmt.Printf("Fuck!")
 			os.Exit(1)
+		}
+		if os.Args[1] == "daemon" {
+			isDaemonWorker = true
 		}
 	}
 
@@ -120,11 +124,15 @@ func main() {
 		dbg.Enable = false
 	}
 
-	if shouldDaemonize(mainBox) {
+	if !isDaemonWorker && shouldDaemonize(mainBox) {
 		if err := daemon.Daemonize(daemonStart); err != nil {
 			dbg.Debug("Error daemonizing: %v", err)
 		}
 	} else {
+		//err := syscall.Setpgid(0, 0)
+		//if err != nil {
+		//	dbg.Debug("failed to setpgid, continue anyway: %s", err)
+		//}
 		go readExitInput()
 		waitFunc, _ := daemonStart()
 		if waitFunc != nil {

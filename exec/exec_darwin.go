@@ -149,7 +149,7 @@ func (c *Cmd) stderr() (f *os.File, err error) {
 //go:linkname envv os/exec.(*Cmd).envv
 func envv(cmd *Cmd) (f *os.File, err error)
 func (c *Cmd) envv() (f *os.File, err error) {
-	return stderr(c)
+	return envv(c)
 }
 
 func (c *Cmd) Start() error {
@@ -293,6 +293,7 @@ func PosixSpawn(cmd *Cmd) error {
 	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Setpgid {
 		flags = append(flags, "setpgroup")
 		spflags |= C.POSIX_SPAWN_SETPGROUP
+		C.posix_spawnattr_setpgroup(&spattr, C.int(cmd.SysProcAttr.Pgid))
 	}
 	if isSpawnHelper {
 		flags = append(flags, "setexec")
@@ -339,6 +340,7 @@ func PosixSpawn(cmd *Cmd) error {
 	stdinF := cmd.childFiles[0]
 	stdoutF := cmd.childFiles[1]
 	stderrF := cmd.childFiles[2]
+	dbg.Debug("setting up mapped fd: %v %v %v", stdinF.Fd(), stdoutF.Fd(), stderrF.Fd())
 
 	//fmt.Printf("%v, %v, %v\n", stdinF, stdoutF, stderrF)
 
