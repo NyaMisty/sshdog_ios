@@ -265,7 +265,7 @@ func PosixSpawn(cmd *Cmd) error {
 	}()
 
 	var spenvp = make([]*C.char, len(envp)+1)
-	spenvp[len(args)] = nil
+	spenvp[len(envp)] = nil
 	for i, envEntry := range envp {
 		spenvp[i] = C.CString(envEntry)
 	}
